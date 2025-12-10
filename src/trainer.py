@@ -77,7 +77,6 @@ def main(config_path: str) -> None:
     bce_loss = nn.BCEWithLogitsLoss()     # for halo vs non-halo
     ce_loss = nn.CrossEntropyLoss()       # for distance/NH
 
-    # In the very beginning you may not have halo labels; set lambda_halo = 0.
     lambda_halo = 0.0
     lambda_dist = 1.0
     lambda_nh = 1.0
