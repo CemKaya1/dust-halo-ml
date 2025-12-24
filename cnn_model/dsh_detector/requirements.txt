@@ -1,0 +1,20 @@
+# DSH Detector Dependencies
+# Install with: pip install -r requirements.txt
+
+# Core ML
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Scientific computing
+numpy>=1.24.0
+scipy>=1.10.0
+pandas>=2.0.0
+
+# Astronomy
+astropy>=5.0.0
+
+# Visualization
+matplotlib>=3.7.0
+
+# Optional: For faster data loading
+# pillow>=9.0.0
