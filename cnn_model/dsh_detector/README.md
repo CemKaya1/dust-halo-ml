@@ -1,276 +1,235 @@
-# DSH Detector - Dust Scattering Halo Detection CNN
+# DSH Detector - Dust Scattering Halo Detection Pipeline
 
-A PyTorch-based convolutional neural network for detecting dust scattering halos (DSH) in X-ray astronomical images.
+A CNN-based detection pipeline for identifying Dust Scattering Halos (DSH) in X-ray astronomical images from eROSITA.
 
 ## Project Overview
 
-This module is **Part 5 (Model Selection & Training)** of the DSH detection project, which aims to:
-1. Train a CNN to distinguish X-ray images containing dust scattering halos from those without
-2. Provide confidence scores and categorization for detections
-3. Enable scanning of large survey images (e.g., eROSITA) using sliding window detection
+This project implements a multi-stage detection pipeline that:
+1. Uses a ResNet CNN to identify potential DSH candidates
+2. Analyzes arc geometry and spatial coherence
+3. Clusters detections and validates using physical constraints
+4. Filters false positives (orphan arcs, noise artifacts)
 
-## Directory Structure
+## File Structure
 
 ```
 dsh_detector/
-├── models/
-│   ├── __init__.py
-│   └── dsh_cnn.py          # CNN architecture (Full and Lite versions)
-├── data/
-│   ├── __init__.py
-│   └── dataset.py          # PyTorch Dataset for FITS loading
-├── utils/
-│   ├── __init__.py
-│   └── visualization.py    # Plotting utilities
-├── train.py                # Training script
-├── inference.py            # Inference and survey scanning
-├── run_training.sh         # Bash script for easy training
-└── README.md              # This file
+│
+├── models/                          # Neural network architectures
+│   ├── __init__.py                  # Package init (can be empty)
+│   ├── dsh_resnet.py                # ResNet with LeakyReLU, strided conv
+│   └── dsh_resnet_attention.py      # ResNet with attention mechanism (optional)
+│
+├── data/                            # Dataset and data loading
+│   ├── __init__.py                  # Package init (can be empty)
+│   └── dataset_v2.py                # Dataset with noise injection + hard negatives
+│
+├── checkpoints_final/               # Saved model weights (created during training)
+│   └── best_model.pth
+│
+├── test_results/                    # Test outputs (created during testing)
+│   ├── *_results.png                # Visualizations
+│   ├── survey_summary_*.json        # Survey statistics
+│   └── strong_candidates_*.json     # Detected halo candidates
+│
+├── dsh_pipeline_final.py            # Main detection pipeline
+├── train_final.py                   # Training script
+├── test_final.py                    # Testing script (single tile + full survey)
+│
+├── balanced_10k_vND7_with_split.csv # Training data CSV
+└── README.md                        # This file
 ```
 
-## Installation
+## Quick Start
 
-### Requirements
+### 1. Training
 
 ```bash
-# Create conda environment (recommended)
-conda create -n dsh python=3.10
-conda activate dsh
+cd /home/pure26/cnn_model/dsh_detector
 
-# Install PyTorch (adjust for your CUDA version)
-# For CUDA 11.8:
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+# Train on GPU (recommended):
+python3 train_final.py
 
-# For CPU only:
-pip install torch torchvision
-
-# Install other dependencies
-pip install numpy pandas matplotlib astropy scipy
+# Train on CPU (slower):
+CUDA_VISIBLE_DEVICES="" python3 train_final.py
 ```
 
-### Quick Install
+**Training output:**
+- Model saved to: `./checkpoints_final/best_model.pth`
+- Training history: `./checkpoints_final/history.json`
+
+### 2. Testing
+
 ```bash
-pip install torch torchvision numpy pandas matplotlib astropy scipy
+# Quick test on single tile:
+python3 test_final.py
+
+# Full survey - scan ALL eROSITA tiles:
+python3 test_final.py --full-survey
+
+# Test specific tile:
+python3 test_final.py --tile /path/to/file.fits
+
+# Custom output directory:
+python3 test_final.py --full-survey --output ./my_results
 ```
 
-## Usage
+## Pipeline Architecture
 
-### 1. Training the Model
-
-#### Option A: Using the bash script
-```bash
-# Edit run_training.sh to set your paths
-nano run_training.sh
-
-# Run training
-bash run_training.sh
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    DSH DETECTION PIPELINE                       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  STAGE 1: Multi-Scale CNN Scan                                  │
+│  ├── Window sizes: 64x64, 128x128, 256x256                      │
+│  ├── Sliding window with stride = window_size / 2               │
+│  └── Initial detection threshold: 0.35                          │
+│                                                                 │
+│  STAGE 2: Arc Geometry Analysis                                 │
+│  ├── 9-region intensity analysis                                │
+│  ├── Determine arc direction (TOP, BOTTOM, LEFT, RIGHT, etc.)   │
+│  └── Calculate arc quality score                                │
+│                                                                 │
+│  STAGE 3: Spatial Clustering                                    │
+│  ├── Union-Find algorithm with spatial bucketing                │
+│  ├── Proximity threshold: 100 pixels                            │
+│  └── Group nearby detections into clusters                      │
+│                                                                 │
+│  STAGE 4: Multi-Scale Investigation                             │
+│  ├── Zoom out on partial detections (0.5x, 1.0x, 1.5x, 2.0x)    │
+│  ├── Reflection padding for edge candidates                     │
+│  └── Find best scale for each detection                         │
+│                                                                 │
+│  STAGE 5: Physical Coherence Analysis                           │
+│  ├── Angular coverage (0-360°)                                  │
+│  ├── Radial consistency                                         │
+│  ├── Center agreement                                           │
+│  └── Classify: STRONG_HALO, PROBABLE_HALO, ARTIFACT, etc.       │
+│                                                                 │
+│  STAGE 6: Final Filtering                                       │
+│  ├── Evidence-based scoring (60% CNN + 40% geometry)            │
+│  ├── Reject artifacts and isolated detections                   │
+│  ├── Apply Non-Maximum Suppression (NMS)                        │
+│  └── Final threshold: 0.45                                      │  
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-#### Option B: Direct Python command
-```bash
-python train.py \
-    --csv_path /path/to/balanced_10k_vND7_with_split.csv \
-    --data_root /data3/efeoztaban/vND7_directories_shrunk_clouds/ \
-    --epochs 100 \
-    --batch_size 32 \
-    --learning_rate 0.001 \
-    --model full \
-    --checkpoint_dir ./checkpoints
-```
+## Output Classification
 
-#### Training Parameters
+| Category | Confidence | Description |
+|----------|------------|-------------|
+| `STRONG_HALO` | 0.85-0.95 | High confidence, good geometry |
+| `PROBABLE_HALO` | 0.70-0.85 | Good evidence, minor issues |
+| `PARTIAL_HALO` | 0.50-0.70 | Incomplete but consistent |
+| `WEAK_CANDIDATE` | 0.35-0.50 | Low evidence, needs follow-up |
+| `ARC_EMISSION` | 0.30-0.40 | Arc-like but not full halo |
+| `ARTIFACT` | < 0.25 | Rejected as noise/artifact |
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `--csv_path` | Required | Path to CSV with image metadata |
-| `--data_root` | Required | Root directory with FITS files |
-| `--epochs` | 100 | Number of training epochs |
-| `--batch_size` | 32 | Batch size |
-| `--learning_rate` | 0.001 | Initial learning rate |
-| `--model` | full | Model type: `full` or `lite` |
-| `--negative_ratio` | 1.0 | Ratio of negative to positive samples |
-| `--dropout` | 0.3 | Dropout rate |
-| `--optimizer` | adam | Optimizer: `adam`, `adamw`, `sgd` |
-| `--scheduler` | plateau | LR scheduler: `plateau`, `cosine` |
-| `--patience` | 15 | Early stopping patience |
-| `--use_amp` | False | Use mixed precision training |
+## Key Features
 
-### 2. Single Image Inference
+### Model Architecture (ResNet)
+- **Skip connections**: Preserve sharp PSF vs fuzzy halo distinction
+- **LeakyReLU**: Keeps faint signals alive in sparse X-ray data
+- **Strided convolutions**: No MaxPool (doesn't delete low-intensity data)
+- **Dropout 0.3-0.4**: Regularization for small dataset
+
+### Dataset Improvements (v2)
+- **Noise injection**: Adds Poisson noise to synthetic halos
+- **Hard negatives**: Bright PSF without halo ring (30% of negatives)
+- **Real eROSITA backgrounds**: Mixed into negative samples
+- **Balanced distribution**: Multiple negative types
+
+### Geometry Validation
+- **Isolation penalty**: Single edge detection = likely noise (confidence 0.1)
+- **Spread requirement**: Large halos need arcs on opposite sides
+- **Center agreement**: Arc directions must point to common center
+
+## Configuration
+
+Edit `test_final.py` CONFIG section to change:
 
 ```python
-from inference import DSHInference
-
-# Load model
-detector = DSHInference(
-    model_path='checkpoints/best_model.pth',
-    model_type='full'
-)
-
-# Predict on a single image
-probability, category = detector.predict('path/to/image.fits')
-print(f"Probability: {probability:.4f}")
-print(f"Category: {category}")
+CONFIG = {
+    'model_path': './checkpoints_final/best_model.pth',
+    'model_type': 'resnet',
+    'erosita_base': '/data3/pure26/eRASS/test_data',
+    'default_tile': '/data3/pure26/eRASS/test_data/150/203/EXP_010/em01_203150_024_Image_c010.fits.gz',
+    'output_dir': './test_results',
+    'window_sizes': [64, 128, 256],
+    'detection_threshold': 0.35,
+    'final_threshold': 0.45
+}
 ```
-
-Or via command line:
-```bash
-python inference.py \
-    --model checkpoints/best_model.pth \
-    --image path/to/image.fits
-```
-
-### 3. Survey Scanning (Sliding Window)
-
-```python
-from inference import SurveyScanner
-
-# Initialize scanner
-scanner = SurveyScanner(
-    model_path='checkpoints/best_model.pth',
-    model_type='full'
-)
-
-# Scan a survey image
-detections = scanner.scan_survey(
-    survey_path='path/to/erosita_survey.fits',
-    window_size=64,
-    stride=32,
-    threshold=0.45,
-    output_path='detections.json'
-)
-
-# Print detections
-for det in detections[:10]:
-    print(f"Position: ({det.x}, {det.y}), Prob: {det.probability:.3f}, Category: {det.category}")
-```
-
-Or via command line:
-```bash
-python inference.py \
-    --model checkpoints/best_model.pth \
-    --survey path/to/erosita_survey.fits \
-    --window_size 64 \
-    --stride 32 \
-    --threshold 0.45 \
-    --output detections.json
-```
-
-### 4. Visualization
-
-```python
-from utils.visualization import (
-    plot_training_history,
-    plot_survey_detections,
-    plot_confusion_matrix
-)
-
-# Plot training curves
-plot_training_history('checkpoints/training_history.json', save_path='training.png')
-
-# Plot detections on survey
-import json
-from astropy.io import fits
-
-survey = fits.open('survey.fits')[0].data
-with open('detections.json') as f:
-    detections = json.load(f)['detections']
-
-plot_survey_detections(survey, detections, save_path='survey_detections.png')
-```
-
-## Model Architecture
-
-### Full Model (DSHDetectorCNN)
-- **Parameters**: ~1.2M
-- **Input**: 64×64 grayscale image
-- **Architecture**: 
-  - 4 convolutional blocks with batch normalization
-  - Global average pooling
-  - 3 fully connected layers with dropout
-  - Sigmoid output for probability
-
-### Lite Model (DSHDetectorCNNLite)
-- **Parameters**: ~200K
-- **Use case**: Faster inference for survey scanning
-- **Architecture**: Simplified version with fewer channels
-
-## Confidence Categories
-
-The model outputs a probability [0, 1] which is categorized as:
-
-| Probability | Category |
-|-------------|----------|
-| ≥ 0.85 | DEFINITE_HALO |
-| 0.65 - 0.85 | PROBABLE_HALO |
-| 0.45 - 0.65 | POSSIBLE_HALO |
-| 0.25 - 0.45 | UNLIKELY_HALO |
-| < 0.25 | NO_HALO |
-
-## Training Data
-
-The training data consists of:
-- **Positive samples**: Synthetic DSH images from FITS files
-- **Negative samples**: Black/zero images (generated during training)
-
-The dataset is loaded from a CSV file with the following columns:
-- `distance`: Source distance
-- `nh_unif`: Uniform hydrogen column density
-- `nh_wco`: Molecular cloud hydrogen column density
-- `relative_path`: Path to FITS file
-- `split`: train/val/test split
-
-## Expected Performance
-
-With the default settings on the synthetic dataset:
-- **Training Accuracy**: ~95-99%
-- **Validation Accuracy**: ~93-97%
-- **Test Accuracy**: ~92-96%
-
-Note: Performance on real eROSITA data will depend on the SIXTE processing and domain adaptation.
-
-## Future Improvements
-
-After running data through SIXTE (Part 4), consider:
-1. Fine-tuning on SIXTE-processed images
-2. Adding more realistic negative samples (PSF-only images)
-3. Implementing attention mechanisms for better localization
-4. Adding multi-scale detection for halos of different sizes
 
 ## Troubleshooting
 
-### Common Issues
-
-1. **Out of Memory Error**
-   - Reduce batch size: `--batch_size 16`
-   - Use lite model: `--model lite`
-   - Enable AMP: `--use_amp`
-
-2. **Slow Training**
-   - Increase workers: `--num_workers 8`
-   - Use GPU: Ensure CUDA is available
-
-3. **Poor Accuracy**
-   - Check data paths are correct
-   - Verify FITS files are loading properly
-   - Try different learning rates
-
-### Checking GPU Availability
-```python
-import torch
-print(f"CUDA available: {torch.cuda.is_available()}")
-print(f"GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'None'}")
+### Model not found
+```bash
+# Train the model first:
+python3 train_final.py
 ```
 
-## Contact
+### Corrupted checkpoint
+```bash
+# Delete and retrain:
+rm -rf ./checkpoints_final/
+python3 train_final.py
+```
 
-Part of the DSH Detection Project
-- Part 1: X-ray detector basics
-- Part 2: Dust scattering halo basics
-- Part 3: Synthetic data curation
-- Part 4: Instrument realism with SIXTE
-- **Part 5: Model selection and training** (this module)
-- Part 6: Testing & eROSITA
+### Import errors
+```bash
+# Empty the __init__.py files:
+echo "" > models/__init__.py
+echo "" > data/__init__.py
+```
 
-## License
+### GPU not detected
+```bash
+# Check CUDA:
+python3 -c "import torch; print(torch.cuda.is_available())"
 
-Internal use for DSH Detection Project
+# Force CPU:
+CUDA_VISIBLE_DEVICES="" python3 train_final.py
+```
+
+## Results Interpretation
+
+After running `python3 test_final.py --full-survey`:
+
+1. **`survey_summary_*.json`**: Overall statistics
+   - Total tiles processed
+   - Detection counts by energy band
+   - Confidence distribution
+
+2. **`strong_candidates_*.json`**: High-confidence detections
+   - Position (center_x, center_y)
+   - Estimated radius
+   - Confidence score
+   - Classification reason
+
+3. **`survey_results_*.png`**: Visualization
+   - Detections by energy band
+   - Confidence distribution pie chart
+   - Candidate types bar chart
+
+## Future Improvements
+
+1. **SIXTE Integration**: Process synthetic data through SIXTE for realistic instrument effects
+2. **Attention Model**: Use `dsh_resnet_attention.py` for better ring detection
+3. **Cross-tile Validation**: Check edge candidates against adjacent tiles
+4. **Known DSH Catalog**: Validate against confirmed DSH locations
+
+## Author
+
+DSH Detection Project - Part 5 (Model Selection & Training)
+
+## Dependencies
+
+- Python 3.8+
+- PyTorch 1.9+
+- NumPy
+- Astropy
+- Matplotlib
+- scikit-learn (for metrics)
